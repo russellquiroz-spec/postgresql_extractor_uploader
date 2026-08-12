@@ -106,7 +106,7 @@ DOS = _fingerprint_de_muestra("llave-dos")
 @pytest.mark.parametrize(
     "valor,esperado",
     [
-        # Lo que imprime ssh-keygen -l, tal cual.
+        # Solo el fingerprint.
         (UNO, (UNO,)),
         # Sin el prefijo SHA256:.
         (UNO.removeprefix("SHA256:"), (UNO,)),
@@ -116,12 +116,33 @@ DOS = _fingerprint_de_muestra("llave-dos")
         (f"{UNO}, {DOS}", (UNO, DOS)),
         # Repetidos: se deduplican conservando el orden.
         (f"{UNO} {UNO} {DOS}", (UNO, DOS)),
+        # La linea completa de `ssh-keygen -l`, pegada tal cual. El tamano de la llave y
+        # el nombre del host se ignoran.
+        (f"256 {UNO} 1.2.3.4 (ED25519)", (UNO,)),
+        # Varias lineas de `ssh-keygen -l` de una sola vez.
+        (f"256 {UNO} 1.2.3.4 (ED25519)\n3072 {DOS} 1.2.3.4 (RSA)", (UNO, DOS)),
+        # La linea que imprime `postgres-local-client fingerprint`.
+        (f"SSH_HOST_FINGERPRINT={UNO}", (UNO,)),
     ],
 )
 def test_fingerprints_de_host_key_normalizados(write_env, minimal_env, valor, esperado):
-    write_env(minimal_env + f"\nSSH_HOST_FINGERPRINT={valor}\n")
+    # El valor puede traer saltos de linea, asi que va entrecomillado en el env.
+    write_env(minimal_env + f'\nSSH_HOST_FINGERPRINT="{valor}"\n')
     _app, ssh, _pg = config_mod.load_config()
     assert ssh.host_fingerprints == esperado
+
+
+def test_una_entrada_sha256_malformada_no_se_ignora_en_silencio(write_env, minimal_env):
+    """
+    Descartar callado un fingerprint que el usuario quiso poner dejaria la verificacion
+    mas debil de lo que el cree.
+    """
+    write_env(minimal_env + f'\nSSH_HOST_FINGERPRINT="{UNO}, SHA256:muy-corto"\n')
+    with pytest.raises(ConfigError) as excinfo:
+        config_mod.load_config()
+    mensaje = str(excinfo.value)
+    assert "2 entradas" in mensaje
+    assert "1 son validas" in mensaje
 
 
 def test_sin_fingerprint_queda_vacio(write_env, minimal_env):

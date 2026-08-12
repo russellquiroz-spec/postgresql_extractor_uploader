@@ -97,6 +97,13 @@ SSH_HOST_FINGERPRINT=SHA256:<fingerprint-ed25519>
 Y listo: no hay que tocar `known_hosts`. La libreria le pide al servidor su host key,
 compara el hash contra esto y solo entonces conecta.
 
+Si lo que te pasan es la linea completa de `ssh-keygen -l`, pegala tal cual —el tamano de
+la llave y el nombre del host se ignoran— y entre comillas si son varias lineas:
+
+```env
+SSH_HOST_FINGERPRINT="256 SHA256:<fingerprint-ed25519> <ip-del-bastion> (ED25519)"
+```
+
 Es la opcion mas fuerte de las dos, aunque parezca la mas informal. El fingerprint te
 llega por un canal donde alguien ya lo verifico; el camino de `ssh-keyscan` de abajo
 confia en lo que te conteste el host, que es exactamente a quien estas tratando de

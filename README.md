@@ -249,7 +249,9 @@ Comportamiento:
 1. **`SSH_HOST_FINGERPRINT` (recomendado).** El fingerprint SHA256 de la VM, en el env.
    La libreria le pide al servidor su host key, compara el hash y solo entonces conecta;
    la llave verificada es la que se le pasa a `sshtunnel`, asi que paramiko la exige en
-   la conexion real. Acepta varios separados por coma.
+   la conexion real. Acepta el fingerprint solo, varios separados por coma, o **la linea
+   completa de `ssh-keygen -l` pegada tal cual** —incluso varias lineas de una vez— para
+   que no tengas que recortar nada a mano.
 2. **`known_hosts`** (`~/.ssh/known_hosts` o `SSH_KNOWN_HOSTS_PATH`), si prefieres la
    convencion de OpenSSH. Es el default cuando no hay fingerprint configurado.
 

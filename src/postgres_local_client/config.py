@@ -174,36 +174,68 @@ def _as_float(value: Optional[str], *, default: float, what: str) -> float:
         raise ConfigError(f"{what} no es un numero valido: '{value}'.") from exc
 
 
+#: Un fingerprint SHA256 con su prefijo, tal como lo imprime OpenSSH.
+_SHA256_RE = re.compile(r"SHA256:([A-Za-z0-9+/]{43}=*)")
+_MENCION_SHA256_RE = re.compile(r"SHA256:", re.IGNORECASE)
+
+
 def _as_fingerprints(value: Optional[str]) -> Tuple[str, ...]:
     """
     Normaliza los fingerprints de host key a `SHA256:<base64 sin padding>`.
 
-    Acepta lo que imprime `ssh-keygen -l`, con o sin el prefijo `SHA256:`, y varios
-    separados por coma, punto y coma o espacios. Un fingerprint no es un secreto: es
-    el hash de una llave publica, asi que puede vivir en el archivo de config.
+    Un fingerprint no es un secreto —es el hash de una llave publica— asi que puede
+    vivir en el archivo de config. Se aceptan tres formas:
+
+      1. La linea completa de `ssh-keygen -l`, tal como sale, con el tamano de la llave
+         y el nombre del host alrededor. Tambien varias lineas de una vez:
+             256 SHA256:AAA... 1.2.3.4 (ED25519)
+             256 SHA256:BBB... 1.2.3.4 (ECDSA)
+      2. Solo los fingerprints, separados por coma, punto y coma o espacios.
+      3. El base64 pelado, sin el prefijo `SHA256:`.
+
+    El espacio no puede ser a la vez separador entre fingerprints y parte de la linea de
+    `ssh-keygen`, asi que se decide por el prefijo: si el valor menciona `SHA256:`, se
+    extraen esos tokens y se ignora lo que los rodea; si no, se parte por separadores y
+    cada pieza tiene que ser un base64 pelado.
     """
     if not value or not value.strip():
         return ()
 
+    texto = value.strip()
+
+    if "MD5:" in texto.upper():
+        raise ConfigError(
+            "SSH_HOST_FINGERPRINT trae un fingerprint MD5. MD5 esta obsoleto para esto; "
+            "usa el SHA256 que imprime 'ssh-keygen -l -f <known_hosts>' o "
+            "'postgres-local-client fingerprint'."
+        )
+
+    menciones = len(_MENCION_SHA256_RE.findall(texto))
+    if menciones:
+        encontrados = _SHA256_RE.findall(texto)
+        # Si alguna mencion de SHA256: no produjo un fingerprint valido, no se ignora en
+        # silencio: descartar callado un fingerprint que el usuario quiso poner deja la
+        # verificacion mas debil de lo que el cree.
+        if len(encontrados) != menciones:
+            raise ConfigError(
+                f"SSH_HOST_FINGERPRINT tiene {menciones} entradas 'SHA256:' pero solo "
+                f"{len(encontrados)} son validas. Cada una debe ser 'SHA256:' seguido de "
+                f"43 caracteres base64. Valor recibido: '{texto[:120]}'."
+            )
+        return tuple(
+            dict.fromkeys(f"SHA256:{base.rstrip('=')}" for base in encontrados)
+        )
+
     fingerprints = []
-    for pieza in re.split(r"[,;\s]+", value.strip()):
+    for pieza in re.split(r"[,;\s]+", texto):
         if not pieza:
             continue
-        limpia = pieza.strip().strip("'\"")
-        if limpia.upper().startswith("MD5:"):
-            raise ConfigError(
-                f"SSH_HOST_FINGERPRINT trae un fingerprint MD5 ('{limpia[:12]}...'). "
-                "MD5 esta obsoleto para esto; usa el SHA256 que imprime "
-                "'ssh-keygen -l -f <known_hosts>' o 'postgres-local-client fingerprint'."
-            )
-        if limpia.upper().startswith("SHA256:"):
-            limpia = limpia[len("SHA256:") :]
-        # OpenSSH imprime el base64 sin padding; se acepta con y sin.
-        limpia = limpia.rstrip("=")
+        limpia = pieza.strip().strip("'\"").rstrip("=")
         if not re.fullmatch(r"[A-Za-z0-9+/]{43}", limpia):
             raise ConfigError(
                 f"SSH_HOST_FINGERPRINT no parece un fingerprint SHA256 valido: '{pieza}'. "
-                "Se espera 'SHA256:' seguido de 43 caracteres base64."
+                "Se espera 'SHA256:' seguido de 43 caracteres base64, o el base64 solo. "
+                "Tambien se acepta pegar tal cual la linea de 'ssh-keygen -l'."
             )
         fingerprints.append(f"SHA256:{limpia}")
     return tuple(dict.fromkeys(fingerprints))
