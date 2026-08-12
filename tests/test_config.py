@@ -132,6 +132,52 @@ def test_fingerprints_de_host_key_normalizados(write_env, minimal_env, valor, es
     assert ssh.host_fingerprints == esperado
 
 
+@pytest.mark.parametrize(
+    "valor,motivo",
+    [
+        # 44 caracteres: antes matcheaba los primeros 43 y se guardaba truncado.
+        (f"{UNO}Z", "un caracter de mas"),
+        # 42 caracteres.
+        (UNO[:-1], "un caracter de menos"),
+        # Con basura pegada despues del padding.
+        (f"{UNO}=X", "basura despues del padding"),
+    ],
+)
+def test_fingerprint_de_largo_equivocado_no_se_trunca_en_silencio(
+    write_env, minimal_env, valor, motivo
+):
+    """
+    Un fingerprint con el largo mal debe fallar, no recortarse.
+
+    Truncado no coincidiria con la llave real y la conexion se rechazaria igual, pero el
+    error apuntaria al host —"la host key no coincide"— en vez de al typo, que es el
+    peor lugar donde mandar a alguien a buscar.
+    """
+    write_env(minimal_env + f'\nSSH_HOST_FINGERPRINT="{valor}"\n')
+    with pytest.raises(ConfigError, match="SSH_HOST_FINGERPRINT"):
+        config_mod.load_config()
+
+
+def test_campo_de_alias_en_minusculas_no_se_ignora(write_env, minimal_env):
+    """
+    `POSTGRES__uno__host` en minusculas no calza con el patron.
+
+    Antes se ignoraba en silencio y el usuario creia que habia configurado el host.
+    """
+    write_env(minimal_env + "\nPOSTGRES__uno__host=otro-host\n")
+    with pytest.raises(ConfigError) as excinfo:
+        config_mod.load_config()
+    mensaje = str(excinfo.value)
+    assert "POSTGRES__uno__host" in mensaje
+    assert "MAYUSCULAS" in mensaje
+
+
+def test_alias_con_caracter_invalido_no_se_ignora(write_env, minimal_env):
+    write_env(minimal_env + "\nPOSTGRES__mi.alias__HOST=localhost\n")
+    with pytest.raises(ConfigError, match="no tiene la forma esperada"):
+        config_mod.load_config()
+
+
 def test_una_entrada_sha256_malformada_no_se_ignora_en_silencio(write_env, minimal_env):
     """
     Descartar callado un fingerprint que el usuario quiso poner dejaria la verificacion

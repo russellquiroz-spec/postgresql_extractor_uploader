@@ -175,7 +175,10 @@ def _as_float(value: Optional[str], *, default: float, what: str) -> float:
 
 
 #: Un fingerprint SHA256 con su prefijo, tal como lo imprime OpenSSH.
-_SHA256_RE = re.compile(r"SHA256:([A-Za-z0-9+/]{43}=*)")
+#: El lookahead final es lo que evita que un token de 44 caracteres matchee sus primeros
+#: 43 y se guarde truncado en silencio: si despues del base64 sigue habiendo base64, no
+#: es un fingerprint valido y hay que decirlo, no recortarlo.
+_SHA256_RE = re.compile(r"SHA256:([A-Za-z0-9+/]{43}=*)(?![A-Za-z0-9+/=])")
 _MENCION_SHA256_RE = re.compile(r"SHA256:", re.IGNORECASE)
 
 
@@ -220,7 +223,9 @@ def _as_fingerprints(value: Optional[str]) -> Tuple[str, ...]:
             raise ConfigError(
                 f"SSH_HOST_FINGERPRINT tiene {menciones} entradas 'SHA256:' pero solo "
                 f"{len(encontrados)} son validas. Cada una debe ser 'SHA256:' seguido de "
-                f"43 caracteres base64. Valor recibido: '{texto[:120]}'."
+                "exactamente 43 caracteres base64 (letras, digitos, '+' y '/'); si sobra o "
+                "falta alguno, suele ser un caracter pegado o un copy/paste cortado. "
+                f"Valor recibido: '{texto[:120]}'."
             )
         return tuple(
             dict.fromkeys(f"SHA256:{base.rstrip('=')}" for base in encontrados)
@@ -345,7 +350,19 @@ def _alias_buckets(file_values: Mapping[str, str]) -> Dict[str, Dict[str, str]]:
 
     def absorb(key: str, value: str) -> None:
         match = _ALIAS_KEY_RE.match(key)
-        if not match or value is None or not value.strip():
+        if not match:
+            # Una clave que empieza por POSTGRES__ y no calza con el patron no se ignora
+            # en silencio: el caso tipico es el campo en minusculas
+            # (POSTGRES__local__host), donde el usuario cree que configuro el host y en
+            # realidad no configuro nada.
+            if key.startswith("POSTGRES__"):
+                raise ConfigError(
+                    f"La clave '{key}' parece un alias pero no tiene la forma esperada "
+                    "POSTGRES__<alias>__<CAMPO>. El alias admite letras, digitos, '_' y "
+                    "'-'; el campo va en MAYUSCULAS (HOST, PORT, DBNAME, ...)."
+                )
+            return
+        if value is None or not value.strip():
             return
         alias = match.group("alias").lower()
         buckets.setdefault(alias, {})[match.group("field")] = _unquote(value)
