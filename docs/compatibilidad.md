@@ -292,27 +292,60 @@ para el forwarding y manejar el canal `direct-tcpip` de paramiko con un buffer g
 
 ## 8. Lo que NO se pudo verificar
 
-**Criterio 31, la mitad de tuneles simultaneos.** Falta. Ver abajo lo que si se verifico.
-
-Requiere abrir un tunel al bastion de Redshift con credenciales de produccion, asi que el
-test existe pero solo corre con `PGC_RUN_CROSS_TUNNEL=1`. El procedimiento esta en
-`docs/pendientes.md`.
-
-**Criterio 32.** Verificado desde nuestro lado (criterio 14: un tunel ajeno se reusa,
-se marca `owned=False` y sigue vivo despues de que la libreria termina). Lo que falta es
-verlo con la hermana de verdad del otro lado, que es la misma corrida de arriba.
-
 **Piso de `pandas>=2.0`.** Se declara por API (`read_sql`, `to_sql`, `itertuples`,
 `astype`, `to_parquet` no cambiaron desde 2.0) pero se verifico empiricamente solo sobre
 la 3.0.5, que es lo que resuelve pip hoy.
 
-### Criterio 31, la mitad de config: VERIFICADO (2026-08-12)
+**Alias `dev` de `redshift_extractor`.** En la corrida del proyecto host dio
+`Timeout opening channel` contra su cluster. El tunel al bastion abre bien y el otro alias
+funciona por el mismo bastion, asi que es alcanzabilidad del target, no convivencia.
 
-Esta es la mitad que importa, porque es donde estaba el bug: que la segunda libreria en
-cargar se quedara con los valores de la primera.
+### Criterios 31 y 32: VERIFICADOS en un proyecto host real (2026-08-12)
 
-Se instalaron las tres en un mismo venv y se cargaron las dos configs en el mismo proceso,
-en **los dos ordenes de import**:
+Se verificaron en el venv de un proyecto que usa las librerias de verdad, con **cuatro**
+instaladas a la vez: `postgres_local_client` (regular, en site-packages) mas
+`postgres_local_extractor`, `redshift_extractor` y `mongo_extractor` (editables).
+
+**Config (criterio 31).** Cargadas en el mismo proceso, en los dos ordenes de import y
+cada orden en su propio subproceso, cada libreria conservo su propio bastion:
+
+| | orden `plc, rs, mg` | orden `mg, rs, plc` |
+|---|---|---|
+| `postgres_local_client` | su bastion | su bastion |
+| `redshift_extractor` | su bastion (otro) | su bastion (otro) |
+| `mongo_extractor` | su jump host / target SSM | identico |
+
+Con un control negativo adicional: contaminando el entorno del proceso con `SSH_HOST`,
+`SSH_PORT`, `SSH_USER`, `SSH_PKEY_PATH`, `LOG_LEVEL` y `OUTPUT_DIR` falsos, las cuatro
+siguieron resolviendo los valores de su archivo. Ninguna lee las variables planas del
+proceso; esta libreria solo admite override con prefijo `PGC_`.
+
+**Tuneles simultaneos (criterios 31 y 32).** Con el tunel de `redshift_extractor` vivo:
+
+| | puerto local | bastion | destino remoto | vivo |
+|---|---|---|---|---|
+| `redshift_extractor` | 59336 | el suyo | su cluster:5439 | si (`select 1`) |
+| `postgres_local_client` | 59345 | el suyo | `localhost:9553` | si (`select 1`) |
+
+Puertos distintos, bastiones distintos, destinos correctos, los dos vivos a la vez con
+consulta real sobre cada uno. Tras `close_all_tunnels()` de esta libreria: su puerto quedo
+cerrado y `tunnel_status()` vacio, y el de la hermana **siguio vivo** — `is_alive=True` y un
+`select 1` nuevo sobre su puerto devolvio 1. Al salir de su contexto, ambos puertos
+cerrados, sin sockets ni threads residuales. Cada libreria cerro unicamente lo suyo.
+
+**Proceso (criterio 26 y 28) en el mismo escenario.** `os.environ`, y `level` y `handlers`
+del root logger, identicos antes de importar, despues de importar las cuatro, y despues de
+la primera operacion de cada una.
+
+Nota sobre `basicConfig`: las cuatro hermanas lo llaman dentro de su `configure_logging()`,
+que mutaria el root logger. En la practica no afecta, porque solo lo invocan sus CLI y no
+su API. Esta libreria **no lo llama en ningun caso**: su `configure_logging()` configura
+unicamente el logger propio, y hay un test que falla si el token aparece en el paquete.
+
+### La verificacion previa, en venv de laboratorio
+
+Antes del proyecto host se corrio lo mismo en un venv limpio con tres instaladas, con el
+mismo resultado en la parte de config:
 
 ```
 venv limpio con: postgres-local-client 0.1.0 + redshift-extractor 0.1.0 + mongo-extractor 0.1.0

@@ -10,21 +10,19 @@ Ultima revision: 2026-08-12.
 
 ## 1. Verificacion cruzada con las hermanas (criterios 31 y 32)
 
-**Estado:** la mitad de config, verificada el 2026-08-12. Falta la de tuneles simultaneos.
+**Estado: CERRADO el 2026-08-12.** Verificados en el venv de un proyecto host real, con
+cuatro librerias del ecosistema instaladas a la vez. Config aislada en los dos ordenes de
+import, dos tuneles simultaneos a bastiones distintos, y cada libreria cerrando unicamente
+el suyo. Evidencia en `docs/compatibilidad.md`.
 
-La mitad verificada es la que importa, porque es donde estaba el bug: que la segunda
-libreria en cargar se quedara con la config de la primera. Se instalaron las tres en un
-mismo venv y las dos configs se cargaron en el mismo proceso en los dos ordenes de import;
-cada una conservo su `SSH_HOST` y `os.environ` quedo intacto. Detalle y salida en
-`docs/compatibilidad.md`.
-
-Lo que falta es ver los dos tuneles vivos a la vez, que necesita abrir uno al bastion de
-Redshift con credenciales de produccion.
+Los tests siguen en la suite y se saltan con mensaje cuando no hay hermanas instaladas, que
+es el caso del venv de desarrollo de esta libreria. Para repetirlo, el procedimiento de
+abajo.
 
 | Test | Que cubre | Como se activa |
 |---|---|---|
-| `test_las_configs_no_se_pisan_con_la_hermana_instalada` | criterio 31 sin red, en los dos ordenes de import | **verificado**: basta instalar la hermana en el venv |
-| `test_tuneles_simultaneos_con_la_hermana` | criterios 31 y 32 completos, dos tuneles vivos | pendiente: `PGC_RUN_CROSS_TUNNEL=1` |
+| `test_las_configs_no_se_pisan_con_la_hermana_instalada` | criterio 31 sin red, en los dos ordenes de import | instalar la hermana en el venv |
+| `test_tuneles_simultaneos_con_la_hermana` | criterios 31 y 32, dos tuneles vivos | `PGC_RUN_CROSS_TUNNEL=1` |
 
 ### Procedimiento
 
