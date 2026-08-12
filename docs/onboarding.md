@@ -53,8 +53,8 @@ Necesitas dos variables de sistema (o entradas de KeyringManager):
 
 | Variable | Contiene | Para que |
 |---|---|---|
-| `VM_SSH_CREDENTIALS` | usuario y password del SSH de la VM | abrir el tunel |
-| `VM_DB_CREDENTIALS` | usuario y password de PostgreSQL | conectarse a la base |
+| `<VAR_CREDENCIAL_SSH>` | usuario y password del SSH de la VM | abrir el tunel |
+| `<VAR_CREDENCIAL_BD>` | usuario y password de PostgreSQL | conectarse a la base |
 
 Formatos aceptados para cualquiera de las dos:
 
@@ -67,7 +67,7 @@ usuario:password
 Para crearlas de forma persistente en Windows:
 
 ```powershell
-[Environment]::SetEnvironmentVariable("VM_DB_CREDENTIALS", '{"user":"tu_usuario","password":"tu_password"}', "User")
+[Environment]::SetEnvironmentVariable("<VAR_CREDENCIAL_BD>", '{"user":"tu_usuario","password":"tu_password"}', "User")
 ```
 
 Despues de crearlas, **abre una terminal nueva**: un proceso ya arrancado no ve variables
@@ -142,7 +142,7 @@ Abrilo y confirma que diga esto (los valores de ejemplo ya vienen correctos):
 ```env
 SSH_HOST=<ip-del-bastion>
 SSH_PORT=22
-SSH_CREDENTIALS_ENV=VM_SSH_CREDENTIALS
+SSH_CREDENTIALS_ENV=<VAR_CREDENCIAL_SSH>
 SSH_HOST_FINGERPRINT=SHA256:<fingerprint-ed25519>
 SSH_LOCAL_PORT=0
 SSH_AUTO_OPEN=true
@@ -151,13 +151,13 @@ DEFAULT_DB=local
 POSTGRES__local__HOST=localhost
 POSTGRES__local__PORT=9553
 POSTGRES__local__DBNAME=<nombre-base>
-POSTGRES__local__CREDENTIALS_ENV=VM_DB_CREDENTIALS
+POSTGRES__local__CREDENTIALS_ENV=<VAR_CREDENCIAL_BD>
 POSTGRES__local__READ_ONLY=true
 
 POSTGRES__local_rw__HOST=localhost
 POSTGRES__local_rw__PORT=9553
 POSTGRES__local_rw__DBNAME=<nombre-base>
-POSTGRES__local_rw__CREDENTIALS_ENV=VM_DB_CREDENTIALS
+POSTGRES__local_rw__CREDENTIALS_ENV=<VAR_CREDENCIAL_BD>
 POSTGRES__local_rw__READ_ONLY=false
 ```
 
@@ -231,7 +231,7 @@ df = extract_sql("select 1 as test;")
 | `TunnelHostKeyError: ... NO coincide` | la host key cambio | **pregunta antes de reemplazarla**; el mensaje trae los dos fingerprints |
 | `TunnelNetworkError: Timeout` | no hay ruta al puerto 22 | Security Group de AWS o tu IP publica cambio |
 | `TunnelNetworkError: Conexion rechazada` | el host responde pero no hay sshd | el servicio `sshd` de la VM esta caido |
-| `TunnelAuthError: Autenticacion SSH rechazada` | usuario o password/llave malos | revisa `VM_SSH_CREDENTIALS`; si usas llave, mira la nota de abajo |
+| `TunnelAuthError: Autenticacion SSH rechazada` | usuario o password/llave malos | revisa `<VAR_CREDENCIAL_SSH>`; si usas llave, mira la nota de abajo |
 | `TunnelBindError` | el puerto local que fijaste esta ocupado | usa `SSH_LOCAL_PORT=0` |
 | `ConfigError: ... BOM` | guardaste el `.env` con BOM | el mensaje trae el comando exacto para arreglarlo |
 | `ConfigError: La variable de sistema '...' no existe` | falta el paso 2, o la terminal es vieja | crea la variable y abre una terminal nueva |

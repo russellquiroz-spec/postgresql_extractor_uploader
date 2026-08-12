@@ -48,13 +48,13 @@ BD_ENGINE_RABBIT_LOCAL = 'postgresql://usuario:password@localhost:9558/<base-loc
 ```env
 # .env.postgres_local_client
 SSH_HOST=<ip-del-bastion>
-SSH_CREDENTIALS_ENV=VM_SSH_CREDENTIALS
+SSH_CREDENTIALS_ENV=<VAR_CREDENCIAL_SSH>
 DEFAULT_DB=local
 
 POSTGRES__local__HOST=localhost
 POSTGRES__local__PORT=9553
 POSTGRES__local__DBNAME=<nombre-base>
-POSTGRES__local__CREDENTIALS_ENV=VM_DB_CREDENTIALS
+POSTGRES__local__CREDENTIALS_ENV=<VAR_CREDENCIAL_BD>
 POSTGRES__local__READ_ONLY=true
 ```
 

@@ -292,21 +292,53 @@ para el forwarding y manejar el canal `direct-tcpip` de paramiko con un buffer g
 
 ## 8. Lo que NO se pudo verificar
 
-**Criterio 31 y 32 (ejercicio cruzado en un mismo proceso).** Requieren tener una
-hermana instalada en el **mismo venv**, y el modelo de distribucion del ecosistema es un
-venv por proyecto: ninguna hermana esta instalada en el venv de esta libreria. El test
-existe y se **salta con mensaje explicito** (nunca pasa en falso).
+**Criterio 31, la mitad de tuneles simultaneos.** Falta. Ver abajo lo que si se verifico.
 
-Lo que si se verifico, y cubre el mismo riesgo sin necesitar la instalacion cruzada:
+Requiere abrir un tunel al bastion de Redshift con credenciales de produccion, asi que el
+test existe pero solo corre con `PGC_RUN_CROSS_TUNNEL=1`. El procedimiento esta en
+`docs/pendientes.md`.
 
-- La resolucion conjunta por pares y de todas juntas (seccion 1), que es la parte de
-  criterio 30 que se puede comprobar sin instalar.
-- El escenario exacto de contaminacion, simulado en proceso: se llama `load_dotenv()`
-  sobre un env que define `SSH_HOST`, `SSH_PORT`, `SSH_USER`, `LOG_LEVEL` y `OUTPUT_DIR`
-  planos —lo que hacian las hermanas— y se comprueba que nuestra config sigue usando la
-  suya.
-- Que un tunel ajeno se reusa y sigue vivo despues de que la libreria termina
-  (criterio 14, que es criterio 32 visto desde nuestro lado).
+**Criterio 32.** Verificado desde nuestro lado (criterio 14: un tunel ajeno se reusa,
+se marca `owned=False` y sigue vivo despues de que la libreria termina). Lo que falta es
+verlo con la hermana de verdad del otro lado, que es la misma corrida de arriba.
+
+**Piso de `pandas>=2.0`.** Se declara por API (`read_sql`, `to_sql`, `itertuples`,
+`astype`, `to_parquet` no cambiaron desde 2.0) pero se verifico empiricamente solo sobre
+la 3.0.5, que es lo que resuelve pip hoy.
+
+### Criterio 31, la mitad de config: VERIFICADO (2026-08-12)
+
+Esta es la mitad que importa, porque es donde estaba el bug: que la segunda libreria en
+cargar se quedara con los valores de la primera.
+
+Se instalaron las tres en un mismo venv y se cargaron las dos configs en el mismo proceso,
+en **los dos ordenes de import**:
+
+```
+venv limpio con: postgres-local-client 0.1.0 + redshift-extractor 0.1.0 + mongo-extractor 0.1.0
+paramiko 3.5.1 | sshtunnel 0.4.0 | python-dotenv 1.0.1 | pandas 3.0.5 | psycopg 3.3.4
+
+test_las_configs_no_se_pisan_con_la_hermana_instalada[hermana-primero]  PASSED
+test_las_configs_no_se_pisan_con_la_hermana_instalada[nuestra-primero]  PASSED
+14 passed, 2 skipped
+```
+
+Lo que verifica cada corrida:
+
+- nuestra config usa el `SSH_HOST` de **nuestro** archivo;
+- la de la hermana usa el suyo, y **sigue igual despues** de que cargue la nuestra;
+- `os.environ` queda identico al inicio del proceso.
+
+El orden de import va en subprocesos separados a proposito: una vez importado un modulo
+queda en `sys.modules`, asi que invertir el orden dentro del mismo interprete no probaria
+nada.
+
+Ademas, sin necesitar la instalacion cruzada:
+
+- La resolucion conjunta por pares y de todas juntas (seccion 1).
+- El escenario de contaminacion simulado en proceso: se carga un env ajeno al entorno del
+  proceso con `SSH_HOST`, `SSH_PORT`, `SSH_USER`, `LOG_LEVEL` y `OUTPUT_DIR` planos —lo
+  que hacian las hermanas— y nuestra config sigue usando la suya.
 
 **Piso de `pandas>=2.0`.** Se declara por API (`read_sql`, `to_sql`, `itertuples`,
 `astype`, `to_parquet` no cambiaron desde 2.0) pero se verifico empiricamente solo sobre

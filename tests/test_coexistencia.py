@@ -351,27 +351,141 @@ def test_ninguna_libreria_del_ecosistema_usa_load_dotenv():
     )
 
 
-def test_convivencia_real_en_un_mismo_proceso(write_env, minimal_env):
-    """
-    Criterio 31: ejercicio cruzado con una hermana en el mismo proceso.
+#: Script que carga las dos configs en un mismo proceso, en el orden que se le pida.
+#: Va en subproceso porque "invertir el orden de import" no se puede hacer dos veces
+#: en el mismo interprete: el primer import queda cacheado en sys.modules.
+_GUION_CRUZADO = '''
+import json, os, sys
 
-    Necesita la hermana instalada en ESTE venv (no solo presente en disco). Si no
-    esta, se salta con mensaje explicito: nunca pasa en falso.
+orden = sys.argv[1]
+antes = dict(os.environ)
+
+if orden == "hermana-primero":
+    import redshift_extractor.config as ajena
+    import postgres_local_client  # noqa: F401
+else:
+    import postgres_local_client  # noqa: F401
+    import redshift_extractor.config as ajena
+
+from postgres_local_client import config as propia
+
+ssh_ajeno, _mapa_ajeno = ajena.load_config()
+_app, ssh_propio, _mapa_propio = propia.load_config()
+
+# Y de nuevo la ajena, DESPUES de cargar la nuestra: su config no debe haber cambiado.
+ssh_ajeno_despues, _ = ajena.load_config()
+
+print(json.dumps({
+    "orden": orden,
+    "ssh_ajeno": ssh_ajeno.host,
+    "ssh_ajeno_despues": ssh_ajeno_despues.host,
+    "ssh_propio": ssh_propio.host,
+    "environ_intacto": dict(os.environ) == antes,
+}))
+'''
+
+
+def _env_de_la_hermana(nombre: str) -> Path:
+    return FUNCIONES_DIR / nombre / f".env.{nombre}"
+
+
+@pytest.mark.parametrize("orden", ["hermana-primero", "nuestra-primero"])
+def test_las_configs_no_se_pisan_con_la_hermana_instalada(
+    write_env, minimal_env, tmp_path, orden
+):
+    """
+    Criterio 31, la mitad que se puede verificar sin red: cada libreria conserva su
+    propia config cuando las dos viven en el mismo proceso, en cualquier orden de
+    import, y `os.environ` queda intacto.
+
+    Es la mitad que importa: el bug original era justamente que la segunda en cargar
+    se quedaba con los valores de la primera.
     """
     try:
         importlib.import_module("redshift_extractor")
     except ImportError:
         pytest.skip(
             "redshift_extractor no esta instalado en este venv (el modelo de "
-            "distribucion es un venv por proyecto). Criterio 31 no verificado; ver "
-            "docs/compatibilidad.md."
+            "distribucion es un venv por proyecto). Ver docs/pendientes.md para el "
+            "procedimiento de verificacion cruzada."
         )
 
-    from postgres_local_client import config as config_mod
+    env_ajeno = _env_de_la_hermana("redshift_extractor")
+    if not env_ajeno.exists():
+        pytest.skip(f"No existe {env_ajeno.name}: la hermana no tiene con que configurarse.")
 
-    write_env(minimal_env)
-    _app, ssh, _pg = config_mod.load_config()
-    assert ssh.host == "ssh.example.test"
+    env_propio = write_env(minimal_env)
+    guion = tmp_path / "cruzado.py"
+    guion.write_text(_GUION_CRUZADO, encoding="utf-8")
+
+    entorno = dict(os.environ)
+    entorno["POSTGRES_LOCAL_CLIENT_ENV_FILE"] = str(env_propio)
+    entorno["REDSHIFT_EXTRACTOR_ENV_FILE"] = str(env_ajeno)
+
+    proceso = subprocess.run(
+        [sys.executable, str(guion), orden],
+        capture_output=True, text=True, timeout=300, env=entorno,
+    )
+    assert proceso.returncode == 0, proceso.stderr[-2000:]
+
+    import json
+
+    datos = json.loads(proceso.stdout.strip().splitlines()[-1])
+
+    # La nuestra usa el host de SU archivo, no el de la hermana.
+    assert datos["ssh_propio"] == "ssh.example.test"
+    # Y la hermana conserva el suyo, antes y despues de que cargue la nuestra.
+    assert datos["ssh_ajeno"] != datos["ssh_propio"]
+    assert datos["ssh_ajeno_despues"] == datos["ssh_ajeno"]
+    # Ninguna de las dos escribio en el entorno del proceso.
+    assert datos["environ_intacto"] is True
+
+
+def test_tuneles_simultaneos_con_la_hermana(real_env):
+    """
+    Criterios 31 y 32 completos: dos tuneles vivos a la vez, y cada libreria cierra
+    unicamente el suyo.
+
+    Pega a los dos bastiones y usa credenciales de produccion, asi que solo corre con
+    PGC_RUN_CROSS_TUNNEL=1. Ver docs/pendientes.md.
+    """
+    if os.environ.get("PGC_RUN_CROSS_TUNNEL") != "1":
+        pytest.skip(
+            "Verificacion cruzada de tuneles omitida (abre un tunel a produccion). "
+            "Corre con PGC_RUN_CROSS_TUNNEL=1. Ver docs/pendientes.md."
+        )
+    try:
+        from redshift_extractor.config import load_config as cargar_ajena
+        from redshift_extractor.tunnel import open_tunnel as abrir_ajeno
+    except ImportError:
+        pytest.skip("redshift_extractor no esta instalado en este venv.")
+
+    from postgres_local_client import extract_sql
+    from postgres_local_client.tunnel import close_all_tunnels, tunnel_status
+
+    ssh_ajeno, mapa_ajeno = cargar_ajena()
+    alias_ajeno = sorted(mapa_ajeno)[0]
+
+    with abrir_ajeno(ssh_ajeno, mapa_ajeno[alias_ajeno]) as tunel_ajeno:
+        puerto_ajeno = tunel_ajeno.local_bind_port
+        assert tunel_ajeno.is_active
+
+        # Nuestra operacion abre su propio tunel, a otro destino y en otro puerto.
+        assert extract_sql("select 1 as ok").iloc[0, 0] == 1
+        propios = tunnel_status()
+        assert len(propios) == 1
+        nuestro = propios[0]
+        assert nuestro.local_port != puerto_ajeno
+        assert nuestro.is_alive
+        assert nuestro.remote_port != mapa_ajeno[alias_ajeno].port
+
+        # Criterio 32: cerramos lo nuestro y el de la hermana sigue vivo.
+        close_all_tunnels()
+        assert not nuestro.is_alive
+        assert tunel_ajeno.is_active, "se cerro un tunel que no era nuestro"
+
+        # Y la hermana sigue sirviendo despues de que cerramos.
+        assert tunel_ajeno.local_bind_port == puerto_ajeno
 
 
 def test_resolucion_conjunta_con_pip(tmp_path):

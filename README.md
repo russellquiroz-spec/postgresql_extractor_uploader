@@ -135,7 +135,7 @@ Autenticacion: elige **una** de las tres opciones.
 ```env
 # A (la que usa el equipo hoy): usuario y password en una variable de sistema,
 #    con el mismo contrato de parseo que CREDENTIALS_ENV.
-SSH_CREDENTIALS_ENV=VM_SSH_CREDENTIALS
+SSH_CREDENTIALS_ENV=<VAR_CREDENCIAL_SSH>
 
 # B (recomendada a futuro): llave privada.
 SSH_USER=<usuario-ssh>
@@ -169,7 +169,7 @@ Opcion A (recomendada): apuntar a una variable de sistema con `CREDENTIALS_ENV`.
 POSTGRES__local__HOST=localhost
 POSTGRES__local__PORT=9553
 POSTGRES__local__DBNAME=<nombre-base>
-POSTGRES__local__CREDENTIALS_ENV=VM_DB_CREDENTIALS
+POSTGRES__local__CREDENTIALS_ENV=<VAR_CREDENCIAL_BD>
 POSTGRES__local__READ_ONLY=true
 ```
 
@@ -538,14 +538,14 @@ DOCUMENTACION ADICIONAL
 
 - `docs/compatibilidad.md`: resultado de la verificacion de resolucion conjunta con las hermanas, y las reglas que garantizan la convivencia.
 - `docs/migracion_postgres_local_extractor.md`: que cambia y que se mantiene igual al migrar desde `postgres_local_extractor`.
-- `docs/onboarding.md`: guia para que un usuario nuevo quede operando (llave SSH, `known_hosts`, `.env`, verificacion).
+- `docs/onboarding.md`: guia para que un usuario nuevo quede operando (credenciales, host key, `.env`, verificacion).
+- `docs/pendientes.md`: lo que quedo fuera de la primera entrega y con que senal convendria retomarlo, mas el procedimiento de verificacion cruzada con las hermanas.
 
 --------------------------------------------------------------------------------
-ROADMAP SUGERIDO
+PENDIENTES
 --------------------------------------------------------------------------------
 
-- Extraer `secret_loader` a un paquete interno compartido, si algun dia el modulo empieza a cambiar seguido.
-- `COPY TO` para exportaciones grandes sin pasar por pandas.
-- Streaming real en lectura (hoy `chunksize` lotea el fetch pero materializa el DataFrame completo).
-- Checks de calidad de datos y metricas de operacion post-carga.
-- Pool de tuneles persistente entre procesos (daemon local) si el costo de apertura molesta.
+En `docs/pendientes.md`, con la razon por la que no se hizo y la senal de cuando convendria
+retomarlo. En resumen: verificacion cruzada con las hermanas (criterios 31 y 32),
+rendimiento de lectura y escritura, checks de calidad post-carga, pool de tuneles entre
+procesos, y extraer `secret_loader` a un paquete compartido.
