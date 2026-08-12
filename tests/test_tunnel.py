@@ -279,6 +279,107 @@ def test_host_desconocido_da_tunnel_host_key_error(tunnel_env, tmp_path):
     assert "ssh-keyscan" in str(excinfo.value)
 
 
+def test_verificacion_por_fingerprint(tunnel_env, ssh_server, tmp_path):
+    """
+    Con SSH_HOST_FINGERPRINT se verifica contra el hash y no se usa known_hosts.
+
+    Es mas fuerte que el camino de known_hosts, donde el usuario agrega la entrada con
+    ssh-keyscan (trust on first use, sin autenticar nada).
+    """
+    from postgres_local_client.tunnel import fingerprint
+
+    esperado = fingerprint(ssh_server.host_key)
+    # known_hosts apuntando a un archivo que no existe: el fingerprint debe bastar.
+    inexistente = tmp_path / "no-hay-known-hosts"
+    tunnel_env(
+        extra=f"\nSSH_KNOWN_HOSTS_PATH={inexistente}\nSSH_HOST_FINGERPRINT={esperado}\n"
+    )
+
+    info = open_tunnel()
+    assert info.local_port > 0
+    assert probe_postgres(info.local_port)
+
+
+def test_fingerprint_equivocado_da_tunnel_host_key_error(tunnel_env):
+    otro = "SHA256:" + "A" * 43
+    tunnel_env(extra=f"\nSSH_HOST_FINGERPRINT={otro}\n")
+
+    with pytest.raises(TunnelHostKeyError) as excinfo:
+        open_tunnel()
+
+    mensaje = str(excinfo.value)
+    assert "no coincide con ningun fingerprint" in mensaje
+    # El mensaje trae el recibido y el esperado, para poder comparar a ojo.
+    assert "recibido" in mensaje
+    assert otro in mensaje
+    assert "postgres-local-client fingerprint" in mensaje
+
+
+def test_fingerprint_tiene_prioridad_sobre_known_hosts(tunnel_env, ssh_server, tmp_path):
+    """Si hay fingerprint, un known_hosts con la llave equivocada no estorba."""
+    from postgres_local_client.tunnel import fingerprint
+
+    equivocada = ssh_server.write_wrong_known_hosts(tmp_path / "known_hosts_malo")
+    tunnel_env(
+        extra=(
+            f"\nSSH_KNOWN_HOSTS_PATH={equivocada}"
+            f"\nSSH_HOST_FINGERPRINT={fingerprint(ssh_server.host_key)}\n"
+        )
+    )
+    info = open_tunnel()
+    assert probe_postgres(info.local_port)
+
+
+def test_varios_fingerprints_acepta_el_que_coincida(tunnel_env, ssh_server):
+    from postgres_local_client.tunnel import fingerprint
+
+    correcto = fingerprint(ssh_server.host_key)
+    tunnel_env(extra=f"\nSSH_HOST_FINGERPRINT=SHA256:{'B' * 43},{correcto}\n")
+    info = open_tunnel()
+    assert probe_postgres(info.local_port)
+
+
+def test_fetch_remote_host_key_devuelve_la_llave_del_servidor(tunnel_env, ssh_server):
+    from postgres_local_client import config as cfg_mod
+    from postgres_local_client.tunnel import fetch_remote_host_key, fingerprint
+
+    tunnel_env()
+    _app, cfg = cfg_mod.resolve("uno")
+    key = fetch_remote_host_key(cfg.ssh)
+    assert fingerprint(key) == fingerprint(ssh_server.host_key)
+    assert key.get_name() == ssh_server.host_key.get_name()
+
+
+def test_fetch_remote_host_key_host_inalcanzable(tmp_path, monkeypatch, fake_pg):
+    from postgres_local_client import config as cfg_mod
+    from postgres_local_client.tunnel import fetch_remote_host_key
+
+    puerto_cerrado = _free_port()
+    contenido = textwrap.dedent(
+        f"""
+        SSH_HOST=127.0.0.1
+        SSH_PORT={puerto_cerrado}
+        SSH_USER=tester
+        SSH_PASSWORD_ENV=PGC_TEST_PWD
+        SSH_CONNECT_TIMEOUT_S=3
+        DEFAULT_DB=uno
+        POSTGRES__uno__HOST=127.0.0.1
+        POSTGRES__uno__PORT={fake_pg.port}
+        POSTGRES__uno__DBNAME=d
+        POSTGRES__uno__USER=u
+        POSTGRES__uno__PASSWORD=p
+        """
+    ).lstrip()
+    path = tmp_path / ".env.postgres_local_client"
+    path.write_bytes(contenido.encode("utf-8"))
+    monkeypatch.setenv("POSTGRES_LOCAL_CLIENT_ENV_FILE", str(path))
+    monkeypatch.setenv("PGC_TEST_PWD", "loquesea")
+
+    _app, cfg = cfg_mod.resolve("uno")
+    with pytest.raises(TunnelNetworkError):
+        fetch_remote_host_key(cfg.ssh)
+
+
 def test_host_key_que_no_coincide_da_tunnel_host_key_error(tunnel_env, ssh_server, tmp_path):
     equivocada = ssh_server.write_wrong_known_hosts(tmp_path / "known_hosts_malo")
     tunnel_env(extra=f"\nSSH_KNOWN_HOSTS_PATH={equivocada}\n")

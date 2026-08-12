@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Any, Optional, TypedDict
+from typing import Any, Optional, Tuple, TypedDict
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,9 @@ class SSHConfig:
     keepalive_s: float = 30.0
     connect_timeout_s: float = 15.0
     known_hosts_path: Optional[str] = None
+    #: Fingerprints SHA256 aceptados para la host key, en formato `SHA256:<base64>`.
+    #: Si hay alguno, se verifica contra estos y no se usa known_hosts.
+    host_fingerprints: Tuple[str, ...] = ()
     #: Compresion del transporte SSH. Activada por default porque sshtunnel reenvia
     #: en trozos de 1 KB y eso limita el throughput: medido sobre un COPY de 100k
     #: filas contra la VM, baja de ~4.1 s a ~2.1 s. Ver docs/compatibilidad.md.

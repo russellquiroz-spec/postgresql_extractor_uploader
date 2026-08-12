@@ -137,6 +137,37 @@ def describe(
     _guarded(action)
 
 
+@app.command("fingerprint")
+def fingerprint_command(
+    db: Optional[str] = typer.Option(None, "--db", help="Alias (default: DEFAULT_DB)."),
+) -> None:
+    """Muestra el fingerprint de la host key que presenta el servidor SSH."""
+
+    def action() -> None:
+        configure_logging(_console_level())
+        from postgres_local_client import config as config_mod
+        from postgres_local_client.tunnel import fetch_remote_host_key
+        from postgres_local_client.tunnel import fingerprint as calcular
+
+        _app_cfg, cfg = config_mod.resolve(db)
+        ssh = cfg.ssh
+        if ssh is None:  # pragma: no cover
+            raise ValueError("El alias no tiene configuracion SSH.")
+
+        key = fetch_remote_host_key(ssh)
+        typer.echo(f"host   : {ssh.host}:{ssh.port}")
+        typer.echo(f"tipo   : {key.get_name()}")
+        typer.echo(f"SSH_HOST_FINGERPRINT={calcular(key)}")
+        typer.echo("")
+        typer.echo(
+            "VERIFICA este fingerprint con quien administra la VM antes de confiar en el.\n"
+            "Este comando lo lee del propio servidor, asi que por si solo no prueba nada:\n"
+            "si alguien estuviera interceptando la conexion, veria su fingerprint aqui."
+        )
+
+    _guarded(action)
+
+
 @app.command("ping")
 def ping_command(
     db: Optional[str] = typer.Option(None, "--db", help="Alias (default: DEFAULT_DB)."),

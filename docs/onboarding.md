@@ -86,34 +86,52 @@ de forma automatica: si el host no esta registrado, falla con `TunnelHostKeyErro
 proposito — aceptar cualquier llave a ciegas es exactamente como se monta un
 man-in-the-middle.
 
-Obtene las llaves del servidor:
+### Opcion recomendada: el fingerprint en el `.env`
+
+Pide el fingerprint de la VM por el canal interno del equipo y pegalo en tu env:
+
+```env
+SSH_HOST_FINGERPRINT=SHA256:<fingerprint-ed25519>
+```
+
+Y listo: no hay que tocar `known_hosts`. La libreria le pide al servidor su host key,
+compara el hash contra esto y solo entonces conecta.
+
+Es la opcion mas fuerte de las dos, aunque parezca la mas informal. El fingerprint te
+llega por un canal donde alguien ya lo verifico; el camino de `ssh-keyscan` de abajo
+confia en lo que te conteste el host, que es exactamente a quien estas tratando de
+verificar. Tambien evita el modo de falla de tener una entrada vieja en
+`~/.ssh/known_hosts` de una VM que se recreo.
+
+Si necesitas leerlo del servidor (para comparar, o para armar el valor la primera vez):
+
+```powershell
+postgres-local-client fingerprint --db local
+```
+
+Imprime la linea lista para pegar. Pero **verificalo con quien administra la VM antes
+de confiar en el**: ese comando lo lee del propio servidor, asi que por si solo no
+prueba nada.
+
+### Alternativa: `known_hosts` de OpenSSH
+
+Si prefieres la convencion de siempre, no definas `SSH_HOST_FINGERPRINT` y registra el
+host:
 
 ```powershell
 ssh-keyscan <ip-del-bastion> >> $env:USERPROFILE\.ssh\known_hosts
+ssh-keygen -l -F <ip-del-bastion>      # y verifica el fingerprint fuera de banda
 ```
 
-Y **verifica el fingerprint con quien administra la VM antes de confiar en el**:
-
-```powershell
-ssh-keygen -l -F <ip-del-bastion>
-```
-
-Los fingerprints al 2026-08-12 son:
-
-```
-SHA256:<fingerprint-ed25519>  (ED25519)  <- la que usa la libreria
-SHA256:<fingerprint-ecdsa>  (ECDSA)
-SHA256:<fingerprint-rsa>  (RSA)
-```
-
-Si lo que ves no coincide con eso, **para y pregunta**. Puede ser que la VM se haya
-recreado (legitimo) o que alguien este interceptando la conexion (no legitimo).
-
-Alternativa: un `known_hosts` por proyecto, que no toca el trust store de tu maquina.
+O un `known_hosts` por proyecto, que no toca el trust store de tu maquina:
 
 ```env
 SSH_KNOWN_HOSTS_PATH=C:\ruta\al\repo\.ssh_known_hosts
 ```
+
+Si el fingerprint que ves no coincide con el que te dieron, **para y pregunta**. Puede
+ser que la VM se haya recreado (legitimo) o que alguien este interceptando la conexion
+(no legitimo).
 
 ---
 
@@ -125,6 +143,7 @@ Abrilo y confirma que diga esto (los valores de ejemplo ya vienen correctos):
 SSH_HOST=<ip-del-bastion>
 SSH_PORT=22
 SSH_CREDENTIALS_ENV=VM_SSH_CREDENTIALS
+SSH_HOST_FINGERPRINT=SHA256:<fingerprint-ed25519>
 SSH_LOCAL_PORT=0
 SSH_AUTO_OPEN=true
 DEFAULT_DB=local

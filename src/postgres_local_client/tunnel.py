@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit
 import base64
 import hashlib
+import hmac
 import logging
 import os
 import signal
@@ -143,6 +144,86 @@ def _host_key_names(ssh: SSHConfig) -> List[str]:
     return [f"[{ssh.host}]:{ssh.port}", ssh.host]
 
 
+def fetch_remote_host_key(ssh: SSHConfig) -> paramiko.PKey:
+    """
+    Pide al servidor su host key, sin autenticarse ni abrir tunel.
+
+    Hace falta porque un fingerprint es un hash y `sshtunnel` necesita el objeto de la
+    llave. Se trae la llave, se compara su fingerprint contra el configurado, y solo
+    entonces se le entrega a sshtunnel para que paramiko la exija en la conexion real.
+    """
+    # El socket se abre aqui y se le entrega ya conectado a paramiko. Si se le pasara
+    # la tupla (host, port), paramiko envuelve cualquier fallo de red en un
+    # SSHException generico ("Unable to connect to ...") y se perderia la distincion
+    # entre "no hay ruta" y "el protocolo SSH fallo".
+    try:
+        sock = socket.create_connection((ssh.host, ssh.port), timeout=ssh.connect_timeout_s)
+    except OSError as exc:
+        raise _network_error(ssh, exc) from exc
+
+    transport: Optional[paramiko.Transport] = None
+    try:
+        transport = paramiko.Transport(sock)
+        with _no_logging_side_effects():
+            transport.start_client(timeout=ssh.connect_timeout_s)
+            return transport.get_remote_server_key()
+    except paramiko.SSHException as exc:
+        raise TunnelError(
+            f"No se pudo negociar SSH con {ssh.host}:{ssh.port} para leer su host key: {exc}"
+        ) from exc
+    except OSError as exc:
+        raise _network_error(ssh, exc) from exc
+    finally:
+        # transport.close() cierra el socket; si no hubo transport, se cierra a mano.
+        try:
+            if transport is not None:
+                transport.close()
+            else:
+                sock.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _verify_host_key_fingerprint(ssh: SSHConfig) -> paramiko.PKey:
+    """
+    Verifica la host key contra los fingerprints del env.
+
+    Es mas fuerte que el camino de known_hosts: ahi el usuario los agrega con
+    `ssh-keyscan`, que es confiar en lo que conteste el host (trust on first use). Un
+    fingerprint que viene en el archivo de config lo verifico alguien fuera de banda
+    antes de escribirlo.
+    """
+    key = fetch_remote_host_key(ssh)
+    recibido = fingerprint(key)
+    if any(hmac.compare_digest(recibido, esperado) for esperado in ssh.host_fingerprints):
+        return key
+
+    esperados = "\n".join(f"    {valor}" for valor in ssh.host_fingerprints)
+    raise TunnelHostKeyError(
+        f"La host key de {ssh.host}:{ssh.port} no coincide con ningun fingerprint de "
+        f"SSH_HOST_FINGERPRINT.\n"
+        f"  recibido : {recibido} ({key.get_name()})\n"
+        f"  esperados:\n{esperados}\n"
+        "Si la VM se recreo, pide el fingerprint nuevo a quien la administra y "
+        "actualiza el env. Si no deberia haber cambiado, no conectes: alguien podria "
+        "estar interceptando la conexion.\n"
+        "Para ver el fingerprint que presenta el servidor: "
+        "postgres-local-client fingerprint"
+    )
+
+
+def resolve_host_key(ssh: SSHConfig) -> paramiko.PKey:
+    """
+    Obtiene la host key esperada. La verificacion nunca se deshabilita.
+
+    Si hay `SSH_HOST_FINGERPRINT` se usa eso; si no, `known_hosts`.
+    """
+    if ssh.host_fingerprints:
+        return _verify_host_key_fingerprint(ssh)
+    _preflight(ssh)
+    return _load_known_host_key(ssh)
+
+
 def _load_known_host_key(ssh: SSHConfig) -> paramiko.PKey:
     """
     Carga la host key esperada desde known_hosts.
@@ -266,6 +347,30 @@ def _load_private_key(ssh: SSHConfig, on_event: Optional[OnEvent]) -> Optional[p
     )
 
 
+def _network_error(ssh: SSHConfig, exc: BaseException) -> TunnelNetworkError:
+    """Traduce un fallo de socket al mensaje accionable que corresponda."""
+    if isinstance(exc, socket.gaierror):
+        return TunnelNetworkError(
+            f"No se pudo resolver el host SSH '{ssh.host}': {exc}. Revisa SSH_HOST."
+        )
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return TunnelNetworkError(
+            f"Timeout al conectar a {ssh.host}:{ssh.port} despues de "
+            f"{ssh.connect_timeout_s:g}s. Causas tipicas, en orden de probabilidad:\n"
+            "  1. El Security Group de AWS no permite el puerto 22 desde tu IP publica "
+            "actual (cambia al reconectar la red o el VPN).\n"
+            "  2. La VM esta apagada.\n"
+            "El puerto 22 se gestiona fuera de esta libreria."
+        )
+    if isinstance(exc, ConnectionRefusedError):
+        return TunnelNetworkError(
+            f"Conexion rechazada en {ssh.host}:{ssh.port}. El host responde pero no hay un "
+            "servidor SSH escuchando ahi: revisa que el servicio 'sshd' de la VM este "
+            "arriba y que SSH_PORT sea el correcto."
+        )
+    return TunnelNetworkError(f"No se pudo alcanzar {ssh.host}:{ssh.port}: {exc}")
+
+
 def _preflight(ssh: SSHConfig) -> None:
     """
     Comprueba que el puerto SSH sea alcanzable antes de involucrar a sshtunnel.
@@ -273,33 +378,15 @@ def _preflight(ssh: SSHConfig) -> None:
     Es necesario porque sshtunnel captura `socket.error` y `AuthenticationException`
     internamente y termina lanzando un unico error generico, con lo que se perderia
     la distincion entre "no hay ruta" y "credenciales invalidas".
+
+    Con `SSH_HOST_FINGERPRINT` no se llama: la lectura de la host key ya hace la
+    conexion y mapea los mismos errores, asi que seria un viaje de mas.
     """
     try:
         with socket.create_connection((ssh.host, ssh.port), timeout=ssh.connect_timeout_s):
             return
-    except socket.gaierror as exc:
-        raise TunnelNetworkError(
-            f"No se pudo resolver el host SSH '{ssh.host}': {exc}. Revisa SSH_HOST."
-        ) from exc
-    except (socket.timeout, TimeoutError) as exc:
-        raise TunnelNetworkError(
-            f"Timeout al conectar a {ssh.host}:{ssh.port} despues de "
-            f"{ssh.connect_timeout_s:g}s. Causas tipicas, en orden de probabilidad:\n"
-            "  1. El Security Group de AWS no permite el puerto 22 desde tu IP publica "
-            "actual (cambia al reconectar la red o el VPN).\n"
-            "  2. La VM esta apagada.\n"
-            "El puerto 22 se gestiona fuera de esta libreria."
-        ) from exc
-    except ConnectionRefusedError as exc:
-        raise TunnelNetworkError(
-            f"Conexion rechazada en {ssh.host}:{ssh.port}. El host responde pero no hay un "
-            "servidor SSH escuchando ahi: revisa que el servicio 'sshd' de la VM este "
-            "arriba y que SSH_PORT sea el correcto."
-        ) from exc
     except OSError as exc:
-        raise TunnelNetworkError(
-            f"No se pudo alcanzar {ssh.host}:{ssh.port}: {exc}"
-        ) from exc
+        raise _network_error(ssh, exc) from exc
 
 
 def fingerprint(key: paramiko.PKey) -> str:
@@ -518,8 +605,7 @@ def _open_forwarder(
     local_port: int,
     on_event: Optional[OnEvent],
 ) -> SSHTunnelForwarder:
-    _preflight(ssh)
-    host_key = _load_known_host_key(ssh)
+    host_key = resolve_host_key(ssh)
     pkey = _load_private_key(ssh, on_event)
 
     if pkey is None and not ssh.password:

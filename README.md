@@ -121,7 +121,8 @@ SSH_AUTO_OPEN=true               # abre el tunel solo si no hay uno vivo
 SSH_KEEPALIVE_S=30
 SSH_CONNECT_TIMEOUT_S=15
 SSH_COMPRESSION=true             # duplica el throughput de las cargas grandes
-# SSH_KNOWN_HOSTS_PATH=...       # default: ~/.ssh/known_hosts
+SSH_HOST_FINGERPRINT=SHA256:... # host key esperada (recomendado)
+# SSH_KNOWN_HOSTS_PATH=...       # alternativa: known_hosts de OpenSSH
 ```
 
 `SSH_COMPRESSION` viene activado a proposito: `sshtunnel` reenvia el trafico en trozos
@@ -243,7 +244,24 @@ Comportamiento:
 7. **Keepalive** cada `SSH_KEEPALIVE_S`, para que un notebook abierto todo el dia no se corte por inactividad.
 8. **Errores distinguibles.** `TunnelNetworkError` (no hay ruta al 22: Security Group o IP cambiada), `TunnelAuthError` (llave o password invalidos), `TunnelBindError` (puerto local ocupado) y `TunnelHostKeyError` (host desconocido o host key que no coincide, con los dos fingerprints en el mensaje).
 
-**Verificacion de host key.** Nunca se deshabilita. Se usa `~/.ssh/known_hosts` (o `SSH_KNOWN_HOSTS_PATH`); si el host no esta registrado, falla con las instrucciones para agregarlo en vez de aceptarlo automaticamente.
+**Verificacion de host key.** Nunca se deshabilita, y hay dos formas de configurarla:
+
+1. **`SSH_HOST_FINGERPRINT` (recomendado).** El fingerprint SHA256 de la VM, en el env.
+   La libreria le pide al servidor su host key, compara el hash y solo entonces conecta;
+   la llave verificada es la que se le pasa a `sshtunnel`, asi que paramiko la exige en
+   la conexion real. Acepta varios separados por coma.
+2. **`known_hosts`** (`~/.ssh/known_hosts` o `SSH_KNOWN_HOSTS_PATH`), si prefieres la
+   convencion de OpenSSH. Es el default cuando no hay fingerprint configurado.
+
+La primera es la mas fuerte de las dos, aunque parezca la mas informal: el fingerprint
+llega por un canal donde alguien ya lo verifico, mientras que poblar `known_hosts` con
+`ssh-keyscan` es confiar en lo que conteste el host — es decir, en justamente lo que se
+quiere verificar. Tambien evita el modo de falla de una entrada vieja en `known_hosts`
+apuntando a una VM que se recreo.
+
+Si el host no esta registrado por ninguna de las dos vias, falla con las instrucciones
+para agregarlo en vez de aceptarlo automaticamente. Para leer el fingerprint que
+presenta el servidor: `postgres-local-client fingerprint`.
 
 --------------------------------------------------------------------------------
 USO COMO LIBRERIA
@@ -407,6 +425,7 @@ El paquete expone el comando `postgres-local-client`:
 ```powershell
 postgres-local-client ls
 postgres-local-client describe --db local
+postgres-local-client fingerprint --db local
 postgres-local-client ping --db local
 postgres-local-client run      --db local --query "select 1 as test" --out .\output\r.parquet --fmt parquet
 postgres-local-client run-file query.sql --db local
@@ -489,7 +508,7 @@ TROUBLESHOOTING
 
 - **SSH auth falla:** revisa `SSH_USER` / `SSH_CREDENTIALS_ENV`, `SSH_PKEY_PATH` y que la llave publica este en `authorized_keys` de la VM. En Windows Server, para una cuenta de administrador la ruta correcta es `C:\ProgramData\ssh\administrators_authorized_keys` (no `~\.ssh\authorized_keys`), y el archivo debe tener ACL restringida a `Administrators` y `SYSTEM`; si no, `sshd` la ignora en silencio. Es la causa numero uno de "la llave es correcta pero no entra".
 - **Timeout al puerto 22:** Security Group de AWS o IP publica de tu maquina cambiada.
-- **`TunnelHostKeyError`:** el host no esta en `known_hosts`. Agregalo con `ssh-keyscan <ip-del-bastion> >> ~/.ssh/known_hosts` y verifica el fingerprint con quien administra la VM. Ver `docs/onboarding.md`.
+- **`TunnelHostKeyError`:** no hay host key esperada, o no coincide. Lo mas simple es pedir el fingerprint al equipo y ponerlo en `SSH_HOST_FINGERPRINT`; el mensaje de error trae el que presento el servidor para comparar. Ver `docs/onboarding.md`.
 - **No conecta a PostgreSQL pero el tunel esta arriba:** verifica `POSTGRES__<alias>__HOST/PORT`; deben ser `localhost:9553` (destino visto desde la VM), no el puerto local del tunel.
 - **Conecta pero la base "esta vacia" o tiene datos raros:** puerto local colisionado con otro PostgreSQL. Revisa `ping()`, que reporta `tunnel_port`, `database` y `user` reales.
 - **La variable de credenciales no aparece:** abre una terminal nueva o valida el valor persistido en Windows (la libreria tambien lee el registro).

@@ -85,6 +85,74 @@ def test_prefijo_pgc_sobre_campos_de_alias(write_env, monkeypatch):
     assert pg_map["uno"].dbname == "otra-base"
 
 
+def _fingerprint_de_muestra(semilla: str) -> str:
+    """
+    Fingerprint valido derivado de una semilla, para no meter los reales en el repo.
+
+    Un fingerprint no es secreto —es el hash de una llave publica— pero si identifica a
+    una maquina concreta, y este repositorio es publico.
+    """
+    import base64
+    import hashlib
+
+    digest = hashlib.sha256(semilla.encode()).digest()
+    return "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
+
+
+UNO = _fingerprint_de_muestra("llave-uno")
+DOS = _fingerprint_de_muestra("llave-dos")
+
+
+@pytest.mark.parametrize(
+    "valor,esperado",
+    [
+        # Lo que imprime ssh-keygen -l, tal cual.
+        (UNO, (UNO,)),
+        # Sin el prefijo SHA256:.
+        (UNO.removeprefix("SHA256:"), (UNO,)),
+        # Con el padding base64 que OpenSSH omite.
+        (UNO + "=", (UNO,)),
+        # Varios separados por coma: un host ofrece ed25519, ecdsa y rsa.
+        (f"{UNO}, {DOS}", (UNO, DOS)),
+        # Repetidos: se deduplican conservando el orden.
+        (f"{UNO} {UNO} {DOS}", (UNO, DOS)),
+    ],
+)
+def test_fingerprints_de_host_key_normalizados(write_env, minimal_env, valor, esperado):
+    write_env(minimal_env + f"\nSSH_HOST_FINGERPRINT={valor}\n")
+    _app, ssh, _pg = config_mod.load_config()
+    assert ssh.host_fingerprints == esperado
+
+
+def test_sin_fingerprint_queda_vacio(write_env, minimal_env):
+    """Sin SSH_HOST_FINGERPRINT se usa known_hosts, que es el default."""
+    write_env(minimal_env)
+    _app, ssh, _pg = config_mod.load_config()
+    assert ssh.host_fingerprints == ()
+
+
+@pytest.mark.parametrize(
+    "valor",
+    [
+        "no-es-un-fingerprint",
+        "SHA256:demasiado-corto",
+        "MD5:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99",
+    ],
+)
+def test_fingerprint_invalido_falla(write_env, minimal_env, valor):
+    write_env(minimal_env + f"\nSSH_HOST_FINGERPRINT={valor}\n")
+    with pytest.raises(ConfigError, match="SSH_HOST_FINGERPRINT"):
+        config_mod.load_config()
+
+
+def test_fingerprint_md5_explica_que_use_sha256(write_env, minimal_env):
+    write_env(minimal_env + "\nSSH_HOST_FINGERPRINT=MD5:aa:bb:cc\n")
+    with pytest.raises(ConfigError) as excinfo:
+        config_mod.load_config()
+    assert "MD5" in str(excinfo.value)
+    assert "SHA256" in str(excinfo.value)
+
+
 def test_compresion_ssh_activada_por_default(write_env, minimal_env):
     """La compresion duplica el throughput de las cargas por el tunel."""
     write_env(minimal_env)

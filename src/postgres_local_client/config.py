@@ -174,6 +174,41 @@ def _as_float(value: Optional[str], *, default: float, what: str) -> float:
         raise ConfigError(f"{what} no es un numero valido: '{value}'.") from exc
 
 
+def _as_fingerprints(value: Optional[str]) -> Tuple[str, ...]:
+    """
+    Normaliza los fingerprints de host key a `SHA256:<base64 sin padding>`.
+
+    Acepta lo que imprime `ssh-keygen -l`, con o sin el prefijo `SHA256:`, y varios
+    separados por coma, punto y coma o espacios. Un fingerprint no es un secreto: es
+    el hash de una llave publica, asi que puede vivir en el archivo de config.
+    """
+    if not value or not value.strip():
+        return ()
+
+    fingerprints = []
+    for pieza in re.split(r"[,;\s]+", value.strip()):
+        if not pieza:
+            continue
+        limpia = pieza.strip().strip("'\"")
+        if limpia.upper().startswith("MD5:"):
+            raise ConfigError(
+                f"SSH_HOST_FINGERPRINT trae un fingerprint MD5 ('{limpia[:12]}...'). "
+                "MD5 esta obsoleto para esto; usa el SHA256 que imprime "
+                "'ssh-keygen -l -f <known_hosts>' o 'postgres-local-client fingerprint'."
+            )
+        if limpia.upper().startswith("SHA256:"):
+            limpia = limpia[len("SHA256:") :]
+        # OpenSSH imprime el base64 sin padding; se acepta con y sin.
+        limpia = limpia.rstrip("=")
+        if not re.fullmatch(r"[A-Za-z0-9+/]{43}", limpia):
+            raise ConfigError(
+                f"SSH_HOST_FINGERPRINT no parece un fingerprint SHA256 valido: '{pieza}'. "
+                "Se espera 'SHA256:' seguido de 43 caracteres base64."
+            )
+        fingerprints.append(f"SHA256:{limpia}")
+    return tuple(dict.fromkeys(fingerprints))
+
+
 def _secret_from_env_name(env_name: Optional[str], what: str) -> Optional[str]:
     """
     Resuelve un secreto a partir del NOMBRE de una variable de sistema.
@@ -266,6 +301,7 @@ def _build_ssh_config(file_values: Mapping[str, str]) -> SSHConfig:
             what="SSH_CONNECT_TIMEOUT_S",
         ),
         known_hosts_path=_lookup(file_values, "SSH_KNOWN_HOSTS_PATH"),
+        host_fingerprints=_as_fingerprints(_lookup(file_values, "SSH_HOST_FINGERPRINT")),
         compression=_as_bool(
             _lookup(file_values, "SSH_COMPRESSION"), default=True, what="SSH_COMPRESSION"
         ),
