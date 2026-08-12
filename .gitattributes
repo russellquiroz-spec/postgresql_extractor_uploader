@@ -1,0 +1,9 @@
+# Normaliza los finales de linea a LF en el repo. Sin esto, en Windows con
+# core.autocrlf=true git avisa en cada `add` y los diffs entre maquinas se llenan de
+# cambios que no son cambios.
+* text=auto eol=lf
+
+# Binarios: que git no los toque.
+*.parquet binary
+*.png binary
+*.pyd binary
